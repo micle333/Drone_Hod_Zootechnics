@@ -12,6 +12,8 @@
 ![photo_2025-06-26_17-11-11](https://github.com/user-attachments/assets/a5fe9dc5-221f-4af5-b9a7-4528e9d9b1af)
 ![photo_2025-06-26_17-11-13](https://github.com/user-attachments/assets/5bdf1c3f-7216-4195-93d1-43d290ebe797)
 
+Параметр EKF должен иметь статус velocity
+
 ## SSH-доступ
 
 Запускаем терминал в Linux и выполняем команду:
@@ -24,9 +26,9 @@ x - ip вашего дрона
 
 1 - 6: 112.
 
-2 - .
+2 - 13: 81.
 
-3 - .
+3 - 11: 99.
 
 4 - 4: 109.
 
@@ -39,7 +41,7 @@ x - ip вашего дрона
 Старое название карты меняем на новое в файле:
 ```
 ~/catkin_ws/src/clover/ $ cd clover/launch/
-~/catkin_ws/src/clover/clover/launch $ nano.aruco.launch
+~/catkin_ws/src/clover/clover/launch $ nano aruco.launch
 ```
 ## Конфигурация и настройка точек по карте
 <br>
