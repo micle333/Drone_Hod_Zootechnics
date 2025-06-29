@@ -1,0 +1,171 @@
+import socket
+import time
+import threading
+from datetime import datetime
+import logging
+
+
+# === Настройки ===
+HOST = '0.0.0.0'
+DRONE_PORTS = [6001, 6002, 6003, 6004]
+MAX_DRONES = len(DRONE_PORTS)
+
+# Настройка логгирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler("server_log.log", encoding="utf-8"),
+        logging.StreamHandler()  # Вывод в консоль
+    ]
+)
+
+# Словарь: drone_id -> connection_socket
+drones = {}
+lock = threading.Lock()
+
+# === Функция для прослушивания одного порта ===
+def listen_on_port(port, drone_id):
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            # Позволяем быстро перезапускать сервер на том же порту
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((HOST, port))
+            sock.listen(1)
+            print(f"[Сервер] Ожидание дрона {drone_id} на порту {port}...")
+
+            conn, addr = sock.accept()
+            print(f"[Сервер] Дрон {drone_id} подключен с адреса {addr}")
+
+            with lock:
+                drones[drone_id] = conn
+
+            logging.info(f"DRONE {drone_id} CONNECTED from {addr}")
+
+            # Запуск обработки сообщений от дрона
+            thread = threading.Thread(target=handle_drone, args=(conn, drone_id))
+            thread.start()
+
+# === Обработка сообщений от дрона ===
+def handle_drone(conn, drone_id):
+    running = True
+    try:
+        while running:
+            data = conn.recv(1024)
+            if len(data) == 0:
+                print(f"[Дрон {drone_id}] Соединение разорвано.")
+                logging.info(f"DRONE {drone_id} DISCONNECTED (connection closed)")
+                running = False
+            else:
+                print(f"[Дрон {drone_id}] Сообщение: {data.decode()}")
+                logging.info(f"DRONE {drone_id} RECEIVED: {data.decode()}")
+    except ConnectionResetError:
+        print(f"[Дрон {drone_id}] Соединение неожиданно разорвано.")
+        logging.info(f"DRONE {drone_id} DISCONNECTED (connection reset)")
+    finally:
+        with lock:
+            if drones.get(drone_id) == conn:
+                del drones[drone_id]
+        conn.close()
+# === Отправка команды конкретному дрону ===
+def send_command_to_drone(drone_id, command):
+    with lock:
+        conn = drones.get(drone_id)
+    if conn:
+        try:
+            conn.sendall(command.encode())
+            print(f"[Команда] Дрону {drone_id} отправлено: {command}")
+            logging.info(f"TO DRONE {drone_id}: {command}")
+        except ConnectionResetError:
+            print(f"[Ошибка] Не удалось отправить команду дрону {drone_id}")
+            logging.error(f"FAILED TO SEND TO DRONE {drone_id}: {command}")
+    else:
+        print(f"[Ошибка] Дрон {drone_id} не подключен.")
+        logging.error(f"ERROR: DRONE {drone_id} NOT CONNECTED")
+
+# === Отправка команды всем дронам ===
+def send_command_to_all(command):
+    print(f"[Команда] Отправка всем дронам: {command}")
+    logging.info(f"TO ALL DRONES: {command}")
+    with lock:
+        for drone_id, conn in drones.items():
+            try:
+                conn.sendall(command.encode())
+                print(f"[Команда] Дрону {drone_id} отправлено: {command}")
+                logging.info(f"TO DRONE {drone_id} (group): {command}")
+            except ConnectionResetError:
+                print(f"[Ошибка] Не удалось отправить команду дрону {drone_id}")
+                logging.error(f"FAILED TO SEND TO DRONE {drone_id} (group): {command}")
+
+#Отправка разных команд всем дронам одновременно ===
+
+# === Основная функция сервера ===
+def start_server():
+    threads = []
+
+    # Запуск слушателей на всех портах
+    for idx, port in enumerate(DRONE_PORTS, start=1):
+        t = threading.Thread(target=listen_on_port, args=(port, idx))
+        t.start()
+        threads.append(t)
+
+    # Ждём подключения всех дронов
+    while len(drones) < MAX_DRONES:
+        pass
+
+    print("\nВсе дроны подключены.\nФормат команд: [номер_дрона] [команда]\nНапример: 1 takeoff\nВведите 'exit' для выхода.")
+
+    # Работа с пользовательским вводом
+    while True:
+        try:
+            user_input = input(">>> ").strip()
+            if user_input.lower() == 'exit':
+                break
+
+            parts = user_input.split(maxsplit=1)
+            #if len(parts) < 2:
+            #    print("Неверный формат. Используйте: [ID/all] [команда]")
+            #    logging.warning(f"Неверный формат. Используйте: [ID/all] [команда]")
+            #    continue
+
+            target = parts[0].lower()
+            command = parts[1]
+
+            if target == 'all':
+                send_command_to_all(command)
+            elif target == 'st':
+                send_command_to_all('led green')
+                send_command_to_all('nav_to a1')
+                time.sleep(6)
+                send_command_to_all('led blue')
+            else:
+                try:
+                    drone_id = int(target)
+                    if drone_id not in range(1, MAX_DRONES + 1):
+                        print(f"Неверный ID дрона. Допустимые значения: 1-{MAX_DRONES}")
+                        logging.warning(f"Неверный ID дрона.")
+                        continue
+                    send_command_to_drone(drone_id, command)
+                except ValueError:
+                    print("ID дрона должен быть числом или 'all'.")
+                    continue
+
+        except KeyboardInterrupt:
+            break
+
+    # Закрытие соединений с дронами
+    with lock:
+        for conn in drones.values():
+            conn.close()
+    
+    # Ожидание завершения потоков
+    for t in threads:
+        t.join(timeout=1)
+        
+    print("Сервер остановлен.")
+    logging.error(f"Сервер остановлен.")
+
+# === Запуск ===
+if __name__ == "__main__":
+    start_server()
